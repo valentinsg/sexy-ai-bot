@@ -1,0 +1,7 @@
+{
+  "name": "sexy-ai-bot",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "react-vite"
+}
