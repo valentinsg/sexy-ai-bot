@@ -1,10 +1,21 @@
+// Chat.tsx
 import React, { useState, useEffect } from 'react';
-import { IonList, IonItem, IonInput, IonButton, IonIcon, IonContent, IonMenuToggle } from '@ionic/react';
+import {
+  IonList,
+  IonItem,
+  IonButton,
+  IonContent,
+  IonGrid,
+  IonRow,
+  IonCol,
+  IonInput,
+} from '@ionic/react';
+import { IonInputCustomEvent, InputChangeEventDetail } from '@ionic/core';
 import io from 'socket.io-client';
-import { add } from 'ionicons/icons';
+import { add, send } from 'ionicons/icons';
 import ChatList from './ChatList';
-import Message, {MessageProps} from './Message';
-import ChatMenu from './ChatMenu';
+import ChatMessage from './ChatMessage';
+import "./Chat.css";
 
 export interface Message {
   id: number;
@@ -17,20 +28,21 @@ export interface ChatProps {
   id: number;
   name: string;
   messages: Message[];
-  active: boolean;
-  onClick: () => void;
+  lastUsed: Date;
 }
 
 const Chat: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]);
   const [socket, setSocket] = useState<any>(null);
-  const [chats, setChats] = useState<{ id: number; name: string; messages: string[] }[]>([]);
-  const [showMenu, setShowMenu] = useState(false);
+  const [chats, setChats] = useState<ChatProps[]>([]);
   const [activeChat, setActiveChat] = useState<number | null>(null);
 
   useEffect(() => {
     const newSocket = io('http://localhost:5173');
+    const cachedChats = localStorage.getItem('chats');
+    if (cachedChats) {
+      setChats(JSON.parse(cachedChats));
+    }
     setSocket(newSocket);
     return () => {
       newSocket.disconnect();
@@ -43,93 +55,137 @@ const Chat: React.FC = () => {
     }
 
     const handleMessage = (newMessage: Message) => {
-      setMessages((messages) => [...messages, newMessage]);
+      setChats((prevChats) => {
+        const updatedChats = prevChats.map((chat) => {
+          if (chat.id === activeChat) {
+            return {
+              ...chat,
+              messages: [...chat.messages, newMessage],
+            };
+          }
+          return chat;
+        });
 
-      const chatIndex = chats.findIndex(
-        (chat) => chat.name === newMessage.sender
-      );
-      if (chatIndex !== -1) {
-        const updatedChats = [...chats];
-        updatedChats[chatIndex] = {
-          id: chatIndex,
-          name: newMessage.sender,
-          messages: [...updatedChats[chatIndex].messages, newMessage.text],
-        };
-        setChats(updatedChats);
-      } else {
-        setChats([
-          ...chats,
-          {
-            id: chats.length,
-            name: newMessage.sender,
-            messages: [newMessage.text],
-          },
-        ]);
-      }
+        localStorage.setItem('chats', JSON.stringify(updatedChats));
+        return updatedChats;
+      });
     };
-    
+
     socket.on('newMessage', handleMessage);
 
     return () => {
       socket.off('newMessage', handleMessage);
     };
-  }, [chats, socket]);
+  }, [socket, activeChat]);
 
-  const handleInput = (e: any) => {
-    setInputValue(e.detail.value);
+  const handleInput = (event: IonInputCustomEvent<InputChangeEventDetail>) => {
+    const value = (event.target as unknown as HTMLInputElement).value;
+    setInputValue(value || '');
+  };
+
+  const handleKeyUp = (event: React.KeyboardEvent<HTMLIonInputElement>) => {
+    if (event.key === 'Enter') {
+      sendMessage();
+    }
   };
 
   const sendMessage = () => {
-    if (!inputValue) {
-      return;
+    if (activeChat !== null && inputValue) {
+      const chatIndex = chats.findIndex((chat) => chat.id === activeChat);
+      if (chatIndex !== -1) {
+        const newMessage: Message = {
+          id: chats[chatIndex].messages.length + 1,
+          timestamp: new Date(),
+          text: inputValue,
+          sender: 'user',
+        };
+
+        socket?.emit('newMessage', newMessage);
+
+        const updatedChats = [...chats];
+        updatedChats[chatIndex] = {
+          ...updatedChats[chatIndex],
+          messages: [...updatedChats[chatIndex].messages, newMessage],
+        };
+
+        setChats(updatedChats);
+        localStorage.setItem('chats', JSON.stringify(updatedChats));
+      }
+
+      setInputValue('');
     }
-
-    const newMessage: Message = {
-      id: messages.length + 1,
-      timestamp: new Date(),
-      text: inputValue,
-      sender: 'user',
-    };
-
-    socket?.emit('newMessage', newMessage);
-    setMessages((messages) => [...messages, newMessage]);
-    setInputValue('');
   };
 
-  const handleNewChat = () => {
-    // Código para crear un nuevo chat y guardarlo en la base de datos
-    // Luego, añadir el nuevo chat a la lista de chats
-  }
-
+  const deleteChat = (chatId: number) => {
+    const updatedChats = chats.filter((chat) => chat.id !== chatId);
+  
+    setChats(updatedChats);
+    localStorage.setItem('chats', JSON.stringify(updatedChats));
+  
+    if (activeChat === chatId) {
+      const newActiveChatId = updatedChats.length > 0 ? updatedChats[0].id : null;
+      setActiveChat(newActiveChatId);
+    }
+  };
+  
+  const createChat = (name: string) => {
+    const newChat: ChatProps = {
+      id: chats.length > 0 ? chats[chats.length - 1].id + 1 : 1,
+      name: name,
+      messages: [],
+      lastUsed: new Date(),
+    };
+  
+    setChats([...chats, newChat]);
+    localStorage.setItem('chats', JSON.stringify([...chats, newChat]));
+  
+    setActiveChat(newChat.id);
+  };
+  
 
   return (
-    <>
-      <IonMenuToggle autoHide={false}>
-        <IonButton slot="end" onClick={() => setShowMenu(!showMenu)}>
-          <IonIcon icon={add} />
-        </IonButton>
-      </IonMenuToggle>
-      <ChatList chats={chats} onNewChat={handleNewChat} />
-      {showMenu && <ChatMenu chats={chats} />}
+    <IonGrid>
+      <IonRow>
+        <IonCol size="3.5">
+          <ChatList
+            chats={chats}
+            onItemClick={setActiveChat}
+            activeChatId={activeChat}
+            onNewChat={createChat}
+            onDeleteChat={deleteChat}
+          />
+        </IonCol>
+        <IonCol size="8">
+          {activeChat !== null && (
+            <>
+              <div className="chat-header">
+                <h2>{chats.find((chat) => chat.id === activeChat)?.name}</h2>
+              </div>
+              <IonContent className="chat-content">
+                <IonList className="chat-list">
+                  {chats
+                    .find((chat) => chat.id === activeChat)
+                    ?.messages.map((message) => (
+                      <ChatMessage key={message.id} message={message} />
+                    ))}
+                </IonList>
 
-      <IonContent>
-      <IonList>
-        {/* Lista de mensajes */}
-        {messages.map((message) => (
-          <Message key={message.id} text={message.text} />
-        ))}
-      </IonList>
-
-        <IonItem>
-          <IonInput
-            placeholder="Escribe tu mensaje"
-            value={inputValue}
-            onIonChange={handleInput}
-          ></IonInput>
-          <IonButton onClick={sendMessage}>Enviar</IonButton>
-        </IonItem>
-      </IonContent>
-    </>
+                <IonItem className="chat-input">
+                  <IonInput
+                    placeholder="Escribe tu mensaje"
+                    value={inputValue}
+                    onIonChange={handleInput}
+                    onKeyUp={handleKeyUp}
+                  ></IonInput>
+                  <IonButton onClick={sendMessage}>Enviar</IonButton>
+                </IonItem>
+              </IonContent>
+            </>
+          )}
+        </IonCol>
+      </IonRow>
+    </IonGrid>
   );
-}
+};
+
 export default Chat;
